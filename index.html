@@ -1,0 +1,1797 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0A0F1E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="정총무 CRM">
+<link rel="manifest" href="manifest.json">
+<title>정총무 CRM — 가맹영업</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- Firebase SDKs -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, where, serverTimestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+  import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js';
+
+  // ─── CONFIG ────────────────────────────────────────────────────────
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyC_PLACEHOLDER",
+    authDomain: "my-awesome-370e5.firebaseapp.com",
+    projectId: "my-awesome-370e5",
+    storageBucket: "my-awesome-370e5.appspot.com",
+    messagingSenderId: "PLACEHOLDER",
+    appId: "PLACEHOLDER"
+  };
+  const VAPID_KEY = "PLACEHOLDER_VAPID_KEY";
+  const ANTHROPIC_PROXY = "https://api.anthropic.com/v1/messages"; // via netlify function or direct
+
+  // ─── INIT ───────────────────────────────────────────────────────────
+  const app = initializeApp(FIREBASE_CONFIG);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  let messaging = null;
+  try { messaging = getMessaging(app); } catch(e) {}
+
+  // ─── STATE ──────────────────────────────────────────────────────────
+  let STATE = {
+    user: null,
+    leads: [],
+    settings: { monthlyGoal: 10, sheetsId: "", sheetsApiKey: "" },
+    activeTab: 'dashboard',
+    activeLead: null,
+    filterSource: 'all',
+    filterStage: 'all',
+    searchQuery: '',
+    showAddModal: false,
+    showLeadModal: false,
+    showSettingsModal: false,
+    showGoalModal: false,
+    aiLoading: false,
+    aiSuggestion: '',
+    unsubscribes: []
+  };
+
+  const STAGES = ['잠재', '초기상담', '현장미팅', '제안서', '계약검토', '계약완료', '무산'];
+  const STAGE_COLORS = {
+    '잠재': '#4B5563',
+    '초기상담': '#2563EB',
+    '현장미팅': '#7C3AED',
+    '제안서': '#D97706',
+    '계약검토': '#DC2626',
+    '계약완료': '#059669',
+    '무산': '#6B7280'
+  };
+  const SOURCES = ['네이버광고', '카카오광고', '지인소개', '전화영업', '박람회', '홈페이지', '기타'];
+  const SOURCE_ICONS = {
+    '네이버광고': '🟢', '카카오광고': '🟡', '지인소개': '🤝',
+    '전화영업': '📞', '박람회': '🏢', '홈페이지': '🌐', '기타': '📌'
+  };
+
+  // ─── RENDER ENGINE ──────────────────────────────────────────────────
+  function $(id) { return document.getElementById(id); }
+
+  function render() {
+    if (!STATE.user) { renderAuth(); return; }
+    renderApp();
+  }
+
+  function renderAuth() {
+    document.body.innerHTML = `
+    <div class="auth-screen">
+      <div class="auth-card">
+        <div class="auth-logo">
+          <span class="auth-logo-mark">정</span>
+          <div>
+            <div class="auth-title">정총무 CRM</div>
+            <div class="auth-sub">가맹영업 관리 시스템</div>
+          </div>
+        </div>
+        <button id="btn-google-login" class="btn-google">
+          <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Google로 로그인
+        </button>
+        <p class="auth-note">nippert-oss 팀 계정으로 접속하세요</p>
+      </div>
+    </div>`;
+    $('btn-google-login').onclick = loginGoogle;
+  }
+
+  async function loginGoogle() {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch(e) { showToast('로그인 실패: ' + e.message, 'error'); }
+  }
+
+  function renderApp() {
+    const filtered = getFilteredLeads();
+    document.body.innerHTML = `
+    <div class="app" id="app">
+      ${renderSidebar()}
+      <main class="main" id="main-content">
+        ${renderTopbar()}
+        <div class="content-area" id="content-area">
+          ${STATE.activeTab === 'dashboard' ? renderDashboard() :
+            STATE.activeTab === 'pipeline' ? renderPipeline() :
+            STATE.activeTab === 'leads' ? renderLeadsList(filtered) :
+            STATE.activeTab === 'kpi' ? renderKPI() :
+            renderLeadsList(filtered)}
+        </div>
+      </main>
+    </div>
+    ${STATE.showAddModal ? renderAddModal() : ''}
+    ${STATE.showLeadModal && STATE.activeLead ? renderLeadModal() : ''}
+    ${STATE.showSettingsModal ? renderSettingsModal() : ''}
+    ${STATE.showGoalModal ? renderGoalModal() : ''}
+    <div id="toast-container"></div>`;
+    attachListeners();
+  }
+
+  function renderSidebar() {
+    const tabs = [
+      { id: 'dashboard', icon: '⬡', label: '대시보드' },
+      { id: 'pipeline', icon: '◈', label: '파이프라인' },
+      { id: 'leads', icon: '◉', label: '리드 목록' },
+      { id: 'kpi', icon: '▣', label: 'KPI 분석' },
+    ];
+    return `
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-mark">정</span>
+        <div class="brand-text">
+          <div class="brand-name">정총무 CRM</div>
+          <div class="brand-ver">v3.0</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        ${tabs.map(t => `
+          <button class="nav-item ${STATE.activeTab === t.id ? 'active' : ''}" data-tab="${t.id}">
+            <span class="nav-icon">${t.icon}</span>
+            <span class="nav-label">${t.label}</span>
+          </button>`).join('')}
+      </nav>
+      <div class="sidebar-footer">
+        <button class="nav-item" id="btn-settings">
+          <span class="nav-icon">⚙</span>
+          <span class="nav-label">설정</span>
+        </button>
+        <button class="nav-item" id="btn-logout">
+          <span class="nav-icon">↪</span>
+          <span class="nav-label">로그아웃</span>
+        </button>
+        <div class="user-chip">
+          <img src="${STATE.user?.photoURL || ''}" class="user-avatar" onerror="this.style.display='none'">
+          <span class="user-name">${STATE.user?.displayName?.split(' ')[0] || '사용자'}</span>
+        </div>
+      </div>
+    </aside>`;
+  }
+
+  function renderTopbar() {
+    const monthGoal = STATE.settings.monthlyGoal || 10;
+    const monthWon = STATE.leads.filter(l => {
+      if (l.stage !== '계약완료') return false;
+      const d = l.updatedAt?.toDate ? l.updatedAt.toDate() : new Date(l.updatedAt);
+      const now = new Date();
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }).length;
+    const pct = Math.min(100, Math.round((monthWon / monthGoal) * 100));
+    return `
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="month-goal-widget" id="btn-goal-modal">
+          <div class="goal-label">이달 목표</div>
+          <div class="goal-progress-bar"><div class="goal-fill" style="width:${pct}%"></div></div>
+          <div class="goal-stat"><span class="goal-done">${monthWon}</span><span class="goal-sep">/</span><span class="goal-total">${monthGoal}</span><span class="goal-unit">건 계약</span><span class="goal-pct">${pct}%</span></div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="search-wrap">
+          <input type="text" id="search-input" placeholder="리드 검색..." value="${STATE.searchQuery}" class="search-input">
+          <span class="search-icon">🔍</span>
+        </div>
+        <button class="btn-primary" id="btn-add-lead">
+          <span>+ 리드 추가</span>
+        </button>
+        <button class="btn-icon" id="btn-sync-sheets" title="Sheets 동기화">⟳</button>
+      </div>
+    </header>`;
+  }
+
+  // ─── DASHBOARD ─────────────────────────────────────────────────────
+  function renderDashboard() {
+    const leads = STATE.leads;
+    const total = leads.length;
+    const active = leads.filter(l => !['계약완료','무산'].includes(l.stage)).length;
+    const won = leads.filter(l => l.stage === '계약완료').length;
+    const lost = leads.filter(l => l.stage === '무산').length;
+    const winRate = total > 0 ? Math.round((won / (won + lost || 1)) * 100) : 0;
+
+    // Stage breakdown
+    const stageCounts = {};
+    STAGES.forEach(s => stageCounts[s] = leads.filter(l => l.stage === s).length);
+
+    // Source breakdown
+    const sourceCounts = {};
+    SOURCES.forEach(s => sourceCounts[s] = leads.filter(l => l.source === s).length);
+    const topSource = Object.entries(sourceCounts).sort((a,b) => b[1]-a[1])[0];
+
+    // Recent activity
+    const recent = [...leads].sort((a,b) => {
+      const da = a.updatedAt?.toDate ? a.updatedAt.toDate() : new Date(a.updatedAt || 0);
+      const db2 = b.updatedAt?.toDate ? b.updatedAt.toDate() : new Date(b.updatedAt || 0);
+      return db2 - da;
+    }).slice(0, 5);
+
+    // Follow-up due
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const overdue = leads.filter(l => {
+      if (!l.nextAction) return false;
+      const d = new Date(l.nextAction);
+      return d <= today && !['계약완료','무산'].includes(l.stage);
+    });
+
+    return `
+    <div class="dashboard">
+      <div class="dash-grid-top">
+        <div class="kpi-card kpi-total">
+          <div class="kpi-icon">◉</div>
+          <div class="kpi-body">
+            <div class="kpi-num">${total}</div>
+            <div class="kpi-lbl">전체 리드</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-active">
+          <div class="kpi-icon">▶</div>
+          <div class="kpi-body">
+            <div class="kpi-num">${active}</div>
+            <div class="kpi-lbl">진행 중</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-won">
+          <div class="kpi-icon">✓</div>
+          <div class="kpi-body">
+            <div class="kpi-num">${won}</div>
+            <div class="kpi-lbl">계약완료</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-rate">
+          <div class="kpi-icon">%</div>
+          <div class="kpi-body">
+            <div class="kpi-num">${winRate}<span class="kpi-unit">%</span></div>
+            <div class="kpi-lbl">승률</div>
+          </div>
+        </div>
+      </div>
+
+      ${overdue.length > 0 ? `
+      <div class="alert-banner">
+        <span class="alert-icon">⚠</span>
+        <span>후속 조치 지연 <strong>${overdue.length}건</strong> — ${overdue.slice(0,3).map(l=>`<span class="alert-lead" data-id="${l.id}">${l.name}</span>`).join(', ')}${overdue.length > 3 ? ` 외 ${overdue.length-3}건` : ''}</span>
+      </div>` : ''}
+
+      <div class="dash-grid-bottom">
+        <div class="dash-card">
+          <div class="dash-card-title">단계별 현황</div>
+          <div class="stage-bars">
+            ${STAGES.filter(s => s !== '무산').map(s => {
+              const cnt = stageCounts[s] || 0;
+              const maxCnt = Math.max(...STAGES.filter(x=>x!=='무산').map(x => stageCounts[x]||0), 1);
+              const w = Math.round((cnt/maxCnt)*100);
+              return `<div class="stage-bar-row">
+                <span class="stage-bar-lbl">${s}</span>
+                <div class="stage-bar-track">
+                  <div class="stage-bar-fill" style="width:${w}%;background:${STAGE_COLORS[s]}"></div>
+                </div>
+                <span class="stage-bar-cnt">${cnt}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <div class="dash-card-title">소스별 리드</div>
+          <div class="source-list">
+            ${SOURCES.map(s => {
+              const cnt = sourceCounts[s] || 0;
+              if (!cnt) return '';
+              const maxCnt = Math.max(...SOURCES.map(x => sourceCounts[x]||0), 1);
+              const w = Math.round((cnt/maxCnt)*100);
+              return `<div class="source-row">
+                <span class="source-icon">${SOURCE_ICONS[s]}</span>
+                <span class="source-lbl">${s}</span>
+                <div class="source-bar-track">
+                  <div class="source-bar-fill" style="width:${w}%"></div>
+                </div>
+                <span class="source-cnt">${cnt}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="dash-card dash-card-wide">
+          <div class="dash-card-title">최근 활동</div>
+          <div class="activity-list">
+            ${recent.length === 0 ? '<div class="empty-state">리드가 없습니다</div>' :
+              recent.map(l => `
+              <div class="activity-row" data-id="${l.id}">
+                <div class="activity-stage-dot" style="background:${STAGE_COLORS[l.stage]}"></div>
+                <div class="activity-info">
+                  <div class="activity-name">${l.name}</div>
+                  <div class="activity-meta">${l.brand || ''} · ${l.source || ''}</div>
+                </div>
+                <div class="activity-right">
+                  <span class="stage-badge" style="--c:${STAGE_COLORS[l.stage]}">${l.stage}</span>
+                  <span class="activity-date">${formatDate(l.updatedAt)}</span>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ─── PIPELINE (KANBAN) ─────────────────────────────────────────────
+  function renderPipeline() {
+    const activeStages = STAGES.filter(s => s !== '무산');
+    return `
+    <div class="pipeline-view">
+      <div class="pipeline-header">
+        <div class="pipe-filter-group">
+          <span class="filter-label">소스:</span>
+          ${['all', ...SOURCES].map(s => `
+            <button class="filter-chip ${STATE.filterSource === s ? 'active' : ''}" data-filter-source="${s}">
+              ${s === 'all' ? '전체' : SOURCE_ICONS[s] + ' ' + s}
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="kanban-board">
+        ${activeStages.map(stage => {
+          const cards = STATE.leads.filter(l => l.stage === stage &&
+            (STATE.filterSource === 'all' || l.source === STATE.filterSource));
+          return `
+          <div class="kanban-col" data-stage="${stage}">
+            <div class="kanban-col-header">
+              <div class="kanban-col-dot" style="background:${STAGE_COLORS[stage]}"></div>
+              <span class="kanban-col-title">${stage}</span>
+              <span class="kanban-col-cnt">${cards.length}</span>
+            </div>
+            <div class="kanban-cards" id="col-${stage}">
+              ${cards.map(l => renderKanbanCard(l)).join('')}
+              <button class="kanban-add-btn" data-stage="${stage}">+ 추가</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  function renderKanbanCard(lead) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const isOverdue = lead.nextAction && new Date(lead.nextAction) <= today && !['계약완료','무산'].includes(lead.stage);
+    return `
+    <div class="kanban-card ${isOverdue ? 'overdue' : ''}" data-id="${lead.id}">
+      <div class="card-top">
+        <span class="card-source">${SOURCE_ICONS[lead.source] || '📌'} ${lead.source || ''}</span>
+        ${isOverdue ? '<span class="card-overdue-badge">지연</span>' : ''}
+      </div>
+      <div class="card-name">${lead.name}</div>
+      <div class="card-brand">${lead.brand || '—'}</div>
+      ${lead.nextAction ? `<div class="card-next-action">📅 ${lead.nextAction}</div>` : ''}
+    </div>`;
+  }
+
+  // ─── LEADS LIST ────────────────────────────────────────────────────
+  function renderLeadsList(leads) {
+    return `
+    <div class="leads-view">
+      <div class="leads-filters">
+        <div class="filter-group">
+          <span class="filter-label">단계:</span>
+          ${['all', ...STAGES].map(s => `
+            <button class="filter-chip ${STATE.filterStage === s ? 'active' : ''}" data-filter-stage="${s}">
+              ${s === 'all' ? '전체' : s}
+            </button>`).join('')}
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">소스:</span>
+          ${['all', ...SOURCES].map(s => `
+            <button class="filter-chip ${STATE.filterSource === s ? 'active' : ''}" data-filter-source="${s}">
+              ${s === 'all' ? '전체' : SOURCE_ICONS[s] + ' ' + s}
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="leads-table-wrap">
+        <table class="leads-table">
+          <thead>
+            <tr>
+              <th>이름</th><th>브랜드</th><th>단계</th><th>소스</th><th>다음 액션</th><th>담당자</th><th>메모</th><th>날짜</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${leads.length === 0 ? `<tr><td colspan="8" class="empty-state">해당 리드가 없습니다</td></tr>` :
+              leads.map(l => `
+              <tr class="lead-row" data-id="${l.id}">
+                <td class="lead-name-cell">${l.name}</td>
+                <td>${l.brand || '—'}</td>
+                <td><span class="stage-badge" style="--c:${STAGE_COLORS[l.stage]}">${l.stage}</span></td>
+                <td>${SOURCE_ICONS[l.source] || ''} ${l.source || '—'}</td>
+                <td class="${isOverdueDate(l.nextAction, l.stage) ? 'overdue-text' : ''}">${l.nextAction || '—'}</td>
+                <td>${l.assignee || '—'}</td>
+                <td class="memo-cell">${(l.memo || '').substring(0,30)}${(l.memo||'').length > 30 ? '...' : ''}</td>
+                <td>${formatDate(l.updatedAt)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  // ─── KPI ────────────────────────────────────────────────────────────
+  function renderKPI() {
+    const leads = STATE.leads;
+    const total = leads.length;
+
+    // Stage conversion rates
+    const stageOrder = ['잠재','초기상담','현장미팅','제안서','계약검토','계약완료'];
+    const convRates = [];
+    for (let i = 0; i < stageOrder.length - 1; i++) {
+      const from = leads.filter(l => {
+        const si = STAGES.indexOf(l.stage);
+        return si >= STAGES.indexOf(stageOrder[i]);
+      }).length;
+      const to = leads.filter(l => {
+        const si = STAGES.indexOf(l.stage);
+        return si >= STAGES.indexOf(stageOrder[i+1]);
+      }).length;
+      convRates.push({ from: stageOrder[i], to: stageOrder[i+1], rate: from > 0 ? Math.round((to/from)*100) : 0, from_cnt: from, to_cnt: to });
+    }
+
+    // Source win rates
+    const sourceStats = SOURCES.map(s => {
+      const total_s = leads.filter(l => l.source === s).length;
+      const won_s = leads.filter(l => l.source === s && l.stage === '계약완료').length;
+      const lost_s = leads.filter(l => l.source === s && l.stage === '무산').length;
+      const active_s = total_s - won_s - lost_s;
+      const wr = (won_s + lost_s) > 0 ? Math.round((won_s/(won_s+lost_s))*100) : null;
+      return { source: s, total: total_s, won: won_s, lost: lost_s, active: active_s, winRate: wr };
+    }).filter(s => s.total > 0);
+
+    // Monthly trend (last 6 months)
+    const monthlyData = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      const added = leads.filter(l => {
+        const ld = l.createdAt?.toDate ? l.createdAt.toDate() : new Date(l.createdAt || 0);
+        return `${ld.getFullYear()}-${String(ld.getMonth()+1).padStart(2,'0')}` === ym;
+      }).length;
+      const won_m = leads.filter(l => {
+        if (l.stage !== '계약완료') return false;
+        const ld = l.updatedAt?.toDate ? l.updatedAt.toDate() : new Date(l.updatedAt || 0);
+        return `${ld.getFullYear()}-${String(ld.getMonth()+1).padStart(2,'0')}` === ym;
+      }).length;
+      monthlyData.push({ month: `${d.getMonth()+1}월`, added, won: won_m });
+    }
+    const maxMonth = Math.max(...monthlyData.map(m => Math.max(m.added, m.won)), 1);
+
+    return `
+    <div class="kpi-view">
+      <div class="kpi-section">
+        <h2 class="kpi-section-title">단계별 전환율 (Funnel)</h2>
+        <div class="funnel-chart">
+          ${convRates.map((c, i) => `
+            <div class="funnel-step">
+              <div class="funnel-bar-wrap">
+                <div class="funnel-bar" style="width:${Math.max(c.rate, 5)}%;background:${STAGE_COLORS[c.from]}">
+                  <span class="funnel-rate">${c.rate}%</span>
+                </div>
+              </div>
+              <div class="funnel-meta">
+                <span class="funnel-from">${c.from} (${c.from_cnt})</span>
+                <span class="funnel-arrow">→</span>
+                <span class="funnel-to">${c.to} (${c.to_cnt})</span>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="kpi-section">
+        <h2 class="kpi-section-title">소스별 성과</h2>
+        <div class="source-kpi-table">
+          <div class="skpi-header">
+            <span>소스</span><span>전체</span><span>진행</span><span>계약</span><span>무산</span><span>승률</span>
+          </div>
+          ${sourceStats.map(s => `
+            <div class="skpi-row">
+              <span>${SOURCE_ICONS[s.source]} ${s.source}</span>
+              <span>${s.total}</span>
+              <span>${s.active}</span>
+              <span class="won-num">${s.won}</span>
+              <span class="lost-num">${s.lost}</span>
+              <span class="wr-badge ${s.winRate >= 50 ? 'wr-good' : s.winRate !== null ? 'wr-bad' : ''}">${s.winRate !== null ? s.winRate + '%' : '—'}</span>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="kpi-section">
+        <h2 class="kpi-section-title">월별 트렌드 (최근 6개월)</h2>
+        <div class="monthly-chart">
+          <div class="chart-legend">
+            <span class="legend-dot" style="background:#3B82F6"></span>유입
+            <span class="legend-dot" style="background:#10B981"></span>계약
+          </div>
+          <div class="bar-chart">
+            ${monthlyData.map(m => `
+              <div class="bar-group">
+                <div class="bar-pair">
+                  <div class="bar bar-added" style="height:${Math.round((m.added/maxMonth)*120)}px" title="${m.added}건 유입"></div>
+                  <div class="bar bar-won" style="height:${Math.round((m.won/maxMonth)*120)}px" title="${m.won}건 계약"></div>
+                </div>
+                <div class="bar-label">${m.month}</div>
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ─── MODALS ─────────────────────────────────────────────────────────
+  function renderAddModal() {
+    const preStage = STATE.preStage || '잠재';
+    return `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>리드 추가</h2>
+          <button class="modal-close" id="btn-close-add">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>이름 *</label>
+              <input type="text" id="f-name" placeholder="홍길동" class="form-input">
+            </div>
+            <div class="form-group">
+              <label>연락처</label>
+              <input type="text" id="f-phone" placeholder="010-0000-0000" class="form-input">
+            </div>
+            <div class="form-group">
+              <label>희망 브랜드</label>
+              <input type="text" id="f-brand" placeholder="와요커피, 기타" class="form-input">
+            </div>
+            <div class="form-group">
+              <label>지역</label>
+              <input type="text" id="f-region" placeholder="경기 남양주" class="form-input">
+            </div>
+            <div class="form-group">
+              <label>유입 소스 *</label>
+              <select id="f-source" class="form-select">
+                ${SOURCES.map(s => `<option value="${s}">${SOURCE_ICONS[s]} ${s}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>단계</label>
+              <select id="f-stage" class="form-select">
+                ${STAGES.map(s => `<option value="${s}" ${s===preStage?'selected':''}>${s}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>담당자</label>
+              <input type="text" id="f-assignee" placeholder="김대리" class="form-input" value="${STATE.user?.displayName || ''}">
+            </div>
+            <div class="form-group">
+              <label>다음 액션 날짜</label>
+              <input type="date" id="f-next-action" class="form-input">
+            </div>
+            <div class="form-group form-group-full">
+              <label>메모</label>
+              <textarea id="f-memo" rows="3" class="form-textarea" placeholder="초기 상담 내용, 특이사항 등"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" id="btn-cancel-add">취소</button>
+          <button class="btn-primary" id="btn-save-lead">저장</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderLeadModal() {
+    const l = STATE.activeLead;
+    const history = l.history || [];
+    return `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal modal-wide">
+        <div class="modal-header">
+          <div>
+            <h2>${l.name}</h2>
+            <div class="modal-sub">${l.brand || ''} · ${l.source || ''} · ${l.region || ''}</div>
+          </div>
+          <button class="modal-close" id="btn-close-lead">✕</button>
+        </div>
+        <div class="modal-body modal-two-col">
+          <div class="modal-col-left">
+            <div class="form-grid">
+              <div class="form-group">
+                <label>이름</label>
+                <input type="text" id="e-name" value="${l.name}" class="form-input">
+              </div>
+              <div class="form-group">
+                <label>연락처</label>
+                <input type="text" id="e-phone" value="${l.phone || ''}" class="form-input">
+              </div>
+              <div class="form-group">
+                <label>브랜드</label>
+                <input type="text" id="e-brand" value="${l.brand || ''}" class="form-input">
+              </div>
+              <div class="form-group">
+                <label>지역</label>
+                <input type="text" id="e-region" value="${l.region || ''}" class="form-input">
+              </div>
+              <div class="form-group">
+                <label>단계</label>
+                <select id="e-stage" class="form-select">
+                  ${STAGES.map(s => `<option value="${s}" ${s===l.stage?'selected':''}>${s}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label>소스</label>
+                <select id="e-source" class="form-select">
+                  ${SOURCES.map(s => `<option value="${s}" ${s===l.source?'selected':''}>${SOURCE_ICONS[s]} ${s}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label>담당자</label>
+                <input type="text" id="e-assignee" value="${l.assignee || ''}" class="form-input">
+              </div>
+              <div class="form-group">
+                <label>다음 액션 날짜</label>
+                <input type="date" id="e-next-action" value="${l.nextAction || ''}" class="form-input">
+              </div>
+              <div class="form-group form-group-full">
+                <label>메모</label>
+                <textarea id="e-memo" rows="4" class="form-textarea">${l.memo || ''}</textarea>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-col-right">
+            <div class="ai-panel">
+              <div class="ai-panel-header">
+                <span class="ai-icon">✦</span>
+                <span>AI 상담 도우미</span>
+              </div>
+              <div class="ai-content" id="ai-content">
+                ${STATE.aiSuggestion ? 
+                  `<div class="ai-suggestion">${STATE.aiSuggestion.replace(/\n/g,'<br>')}</div>` :
+                  `<div class="ai-placeholder">이 리드에 맞는 다음 액션을 추천받으세요</div>`}
+              </div>
+              <button class="btn-ai ${STATE.aiLoading ? 'loading' : ''}" id="btn-get-ai">
+                ${STATE.aiLoading ? '분석 중...' : '✦ AI 추천 받기'}
+              </button>
+            </div>
+
+            <div class="history-panel">
+              <div class="history-header">활동 히스토리</div>
+              <div class="history-add">
+                <textarea id="history-input" class="form-textarea" rows="2" placeholder="상담 내용, 연락 결과 등 기록..."></textarea>
+                <button class="btn-secondary btn-sm" id="btn-add-history">기록 추가</button>
+              </div>
+              <div class="history-list">
+                ${history.length === 0 ? '<div class="empty-state">기록이 없습니다</div>' :
+                  [...history].reverse().map(h => `
+                  <div class="history-item">
+                    <div class="history-date">${h.date || ''} · ${h.by || ''}</div>
+                    <div class="history-text">${(h.text||'').replace(/\n/g,'<br>')}</div>
+                  </div>`).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-lead">삭제</button>
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-lead">닫기</button>
+            <button class="btn-primary" id="btn-update-lead">저장</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderSettingsModal() {
+    const s = STATE.settings;
+    return `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>⚙ 설정</h2>
+          <button class="modal-close" id="btn-close-settings">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-section">
+            <h3>Firebase 설정</h3>
+            <p class="settings-note">Firebase Console에서 복사하세요 (my-awesome-370e5)</p>
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="text" id="s-api-key" value="${s.firebaseApiKey || ''}" class="form-input" placeholder="AIzaSy...">
+            </div>
+            <div class="form-group">
+              <label>App ID</label>
+              <input type="text" id="s-app-id" value="${s.firebaseAppId || ''}" class="form-input" placeholder="1:xxx:web:xxx">
+            </div>
+            <div class="form-group">
+              <label>Messaging Sender ID</label>
+              <input type="text" id="s-sender-id" value="${s.firebaseSenderId || ''}" class="form-input">
+            </div>
+            <div class="form-group">
+              <label>VAPID Key (FCM 푸시)</label>
+              <input type="text" id="s-vapid" value="${s.vapidKey || ''}" class="form-input" placeholder="BXXX...">
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>Google Sheets 연동</h3>
+            <p class="settings-note">리드 데이터를 Sheets로 자동 내보내기</p>
+            <div class="form-group">
+              <label>Spreadsheet ID</label>
+              <input type="text" id="s-sheets-id" value="${s.sheetsId || ''}" class="form-input" placeholder="1BxiMVs0XRA...">
+            </div>
+            <div class="form-group">
+              <label>Google Sheets API Key</label>
+              <input type="text" id="s-sheets-key" value="${s.sheetsApiKey || ''}" class="form-input" placeholder="AIzaSy...">
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>AI 상담 도우미</h3>
+            <div class="form-group">
+              <label>Anthropic API Key</label>
+              <input type="text" id="s-anthropic-key" value="${s.anthropicKey || ''}" class="form-input" placeholder="sk-ant-...">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" id="btn-cancel-settings">취소</button>
+          <button class="btn-primary" id="btn-save-settings">저장</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderGoalModal() {
+    return `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h2>월 목표 설정</h2>
+          <button class="modal-close" id="btn-close-goal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>이달 계약 목표 (건수)</label>
+            <input type="number" id="g-goal" value="${STATE.settings.monthlyGoal || 10}" min="1" max="999" class="form-input form-input-lg">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" id="btn-cancel-goal">취소</button>
+          <button class="btn-primary" id="btn-save-goal">저장</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ─── EVENT LISTENERS ────────────────────────────────────────────────
+  function attachListeners() {
+    // Tab nav
+    document.querySelectorAll('[data-tab]').forEach(btn => {
+      btn.onclick = () => { STATE.activeTab = btn.dataset.tab; render(); };
+    });
+
+    // Search
+    const si = $('search-input');
+    if (si) si.oninput = (e) => { STATE.searchQuery = e.target.value; render(); };
+
+    // Add lead button
+    const bal = $('btn-add-lead');
+    if (bal) bal.onclick = () => { STATE.showAddModal = true; STATE.preStage = null; render(); };
+
+    // Settings
+    const bset = $('btn-settings');
+    if (bset) bset.onclick = () => { STATE.showSettingsModal = true; render(); };
+
+    // Logout
+    const blog = $('btn-logout');
+    if (blog) blog.onclick = () => signOut(auth);
+
+    // Goal modal
+    const bgm = $('btn-goal-modal');
+    if (bgm) bgm.onclick = () => { STATE.showGoalModal = true; render(); };
+
+    // Sync sheets
+    const bss = $('btn-sync-sheets');
+    if (bss) bss.onclick = syncToSheets;
+
+    // Filter chips
+    document.querySelectorAll('[data-filter-stage]').forEach(btn => {
+      btn.onclick = () => { STATE.filterStage = btn.dataset.filterStage; render(); };
+    });
+    document.querySelectorAll('[data-filter-source]').forEach(btn => {
+      btn.onclick = () => { STATE.filterSource = btn.dataset.filterSource; render(); };
+    });
+
+    // Lead rows
+    document.querySelectorAll('[data-id]').forEach(el => {
+      el.onclick = () => openLead(el.dataset.id);
+    });
+
+    // Kanban add
+    document.querySelectorAll('[data-stage]').forEach(btn => {
+      if (btn.classList.contains('kanban-add-btn')) {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          STATE.showAddModal = true;
+          STATE.preStage = btn.dataset.stage;
+          render();
+        };
+      }
+    });
+
+    // Add modal
+    const bca = $('btn-cancel-add'), bcl2 = $('btn-close-add'), bsl = $('btn-save-lead');
+    if (bca) bca.onclick = () => { STATE.showAddModal = false; render(); };
+    if (bcl2) bcl2.onclick = () => { STATE.showAddModal = false; render(); };
+    if (bsl) bsl.onclick = saveLead;
+
+    // Lead modal
+    const bcl = $('btn-cancel-lead'), bcl3 = $('btn-close-lead');
+    const bul = $('btn-update-lead'), bdl = $('btn-delete-lead');
+    const bai = $('btn-get-ai'), bah = $('btn-add-history');
+    if (bcl) bcl.onclick = () => { STATE.showLeadModal = false; STATE.activeLead = null; STATE.aiSuggestion = ''; render(); };
+    if (bcl3) bcl3.onclick = () => { STATE.showLeadModal = false; STATE.activeLead = null; STATE.aiSuggestion = ''; render(); };
+    if (bul) bul.onclick = updateLead;
+    if (bdl) bdl.onclick = deleteLead;
+    if (bai) bai.onclick = getAISuggestion;
+    if (bah) bah.onclick = addHistory;
+
+    // Settings modal
+    const bcs = $('btn-cancel-settings'), bcl4 = $('btn-close-settings'), bsave = $('btn-save-settings');
+    if (bcs) bcs.onclick = () => { STATE.showSettingsModal = false; render(); };
+    if (bcl4) bcl4.onclick = () => { STATE.showSettingsModal = false; render(); };
+    if (bsave) bsave.onclick = saveSettings;
+
+    // Goal modal
+    const bcg = $('btn-cancel-goal'), bcl5 = $('btn-close-goal'), bsg = $('btn-save-goal');
+    if (bcg) bcg.onclick = () => { STATE.showGoalModal = false; render(); };
+    if (bcl5) bcl5.onclick = () => { STATE.showGoalModal = false; render(); };
+    if (bsg) bsg.onclick = saveGoal;
+
+    // Backdrop close
+    const bd = $('modal-backdrop');
+    if (bd) bd.onclick = (e) => {
+      if (e.target === bd) {
+        STATE.showAddModal = false;
+        STATE.showLeadModal = false;
+        STATE.showSettingsModal = false;
+        STATE.showGoalModal = false;
+        render();
+      }
+    };
+  }
+
+  // ─── FIRESTORE OPS ──────────────────────────────────────────────────
+  async function saveLead() {
+    const name = $('f-name')?.value?.trim();
+    if (!name) { showToast('이름을 입력하세요', 'error'); return; }
+    try {
+      const data = {
+        name, phone: $('f-phone')?.value || '',
+        brand: $('f-brand')?.value || '', region: $('f-region')?.value || '',
+        source: $('f-source')?.value || '기타', stage: $('f-stage')?.value || '잠재',
+        assignee: $('f-assignee')?.value || '', memo: $('f-memo')?.value || '',
+        nextAction: $('f-next-action')?.value || '',
+        history: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        createdBy: STATE.user.uid
+      };
+      await addDoc(collection(db, 'leads'), data);
+      STATE.showAddModal = false;
+      showToast('리드가 추가되었습니다 ✓');
+      render();
+    } catch(e) { showToast('저장 실패: ' + e.message, 'error'); }
+  }
+
+  async function updateLead() {
+    const l = STATE.activeLead;
+    if (!l) return;
+    try {
+      const prevStage = l.stage;
+      const newStage = $('e-stage')?.value;
+      const data = {
+        name: $('e-name')?.value || l.name,
+        phone: $('e-phone')?.value || '', brand: $('e-brand')?.value || '',
+        region: $('e-region')?.value || '', stage: newStage,
+        source: $('e-source')?.value || l.source, assignee: $('e-assignee')?.value || '',
+        memo: $('e-memo')?.value || '', nextAction: $('e-next-action')?.value || '',
+        updatedAt: serverTimestamp()
+      };
+      await updateDoc(doc(db, 'leads', l.id), data);
+      if (prevStage !== newStage) {
+        showToast(`단계 변경: ${prevStage} → ${newStage} ✓`);
+      } else {
+        showToast('저장되었습니다 ✓');
+      }
+      STATE.showLeadModal = false;
+      STATE.activeLead = null;
+      STATE.aiSuggestion = '';
+      render();
+    } catch(e) { showToast('저장 실패: ' + e.message, 'error'); }
+  }
+
+  async function deleteLead() {
+    const l = STATE.activeLead;
+    if (!l) return;
+    if (!confirm(`"${l.name}" 리드를 삭제하시겠습니까?`)) return;
+    try {
+      await deleteDoc(doc(db, 'leads', l.id));
+      STATE.showLeadModal = false; STATE.activeLead = null;
+      showToast('삭제되었습니다');
+      render();
+    } catch(e) { showToast('삭제 실패: ' + e.message, 'error'); }
+  }
+
+  async function addHistory() {
+    const text = $('history-input')?.value?.trim();
+    if (!text || !STATE.activeLead) return;
+    const l = STATE.activeLead;
+    const entry = {
+      text, date: new Date().toLocaleDateString('ko-KR'),
+      by: STATE.user?.displayName || '사용자'
+    };
+    const history = [...(l.history || []), entry];
+    try {
+      await updateDoc(doc(db, 'leads', l.id), { history, updatedAt: serverTimestamp() });
+      STATE.activeLead = { ...l, history };
+      render();
+      $('history-input').value = '';
+    } catch(e) { showToast('기록 실패: ' + e.message, 'error'); }
+  }
+
+  function openLead(id) {
+    const lead = STATE.leads.find(l => l.id === id);
+    if (!lead) return;
+    STATE.activeLead = lead;
+    STATE.showLeadModal = true;
+    STATE.aiSuggestion = '';
+    render();
+  }
+
+  // ─── AI SUGGESTION ──────────────────────────────────────────────────
+  async function getAISuggestion() {
+    const l = STATE.activeLead;
+    if (!l) return;
+    const key = STATE.settings.anthropicKey;
+    if (!key) { showToast('설정에서 Anthropic API Key를 입력하세요', 'error'); return; }
+
+    STATE.aiLoading = true;
+    render();
+
+    const prompt = `당신은 프랜차이즈 가맹영업 전문가입니다.
+
+아래 리드 정보를 보고 최적의 다음 영업 액션을 한국어로 구체적으로 추천해주세요.
+
+[리드 정보]
+- 이름: ${l.name}
+- 희망 브랜드: ${l.brand || '미정'}
+- 지역: ${l.region || '미정'}
+- 현재 단계: ${l.stage}
+- 유입 소스: ${l.source}
+- 메모: ${l.memo || '없음'}
+- 최근 히스토리: ${(l.history||[]).slice(-2).map(h=>h.text).join(' / ') || '없음'}
+
+다음 형식으로 답변해주세요:
+1. **추천 액션** (구체적인 행동 1-2가지)
+2. **타이밍** (언제 연락/방문할지)
+3. **핵심 포인트** (이 리드에게 강조할 내용)`;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 600,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await res.json();
+      STATE.aiSuggestion = data.content?.[0]?.text || '추천을 가져오지 못했습니다.';
+    } catch(e) {
+      STATE.aiSuggestion = '오류가 발생했습니다: ' + e.message;
+    }
+    STATE.aiLoading = false;
+    render();
+  }
+
+  // ─── SETTINGS ────────────────────────────────────────────────────────
+  async function saveSettings() {
+    const settings = {
+      ...STATE.settings,
+      firebaseApiKey: $('s-api-key')?.value || '',
+      firebaseAppId: $('s-app-id')?.value || '',
+      firebaseSenderId: $('s-sender-id')?.value || '',
+      vapidKey: $('s-vapid')?.value || '',
+      sheetsId: $('s-sheets-id')?.value || '',
+      sheetsApiKey: $('s-sheets-key')?.value || '',
+      anthropicKey: $('s-anthropic-key')?.value || ''
+    };
+    try {
+      await setDoc(doc(db, 'settings', STATE.user.uid), settings);
+      STATE.settings = settings;
+      STATE.showSettingsModal = false;
+      showToast('설정이 저장되었습니다 ✓');
+      render();
+      initFCM();
+    } catch(e) { showToast('설정 저장 실패: ' + e.message, 'error'); }
+  }
+
+  async function saveGoal() {
+    const goal = parseInt($('g-goal')?.value) || 10;
+    STATE.settings.monthlyGoal = goal;
+    try {
+      await setDoc(doc(db, 'settings', STATE.user.uid), STATE.settings, { merge: true });
+      STATE.showGoalModal = false;
+      showToast(`월 목표: ${goal}건 ✓`);
+      render();
+    } catch(e) { showToast('저장 실패', 'error'); }
+  }
+
+  // ─── GOOGLE SHEETS SYNC ─────────────────────────────────────────────
+  async function syncToSheets() {
+    const { sheetsId, sheetsApiKey } = STATE.settings;
+    if (!sheetsId || !sheetsApiKey) {
+      showToast('설정에서 Google Sheets 정보를 입력하세요', 'error');
+      STATE.showSettingsModal = true; render(); return;
+    }
+    showToast('Sheets 동기화 중...', 'info');
+    try {
+      const values = [
+        ['이름','연락처','브랜드','지역','단계','소스','담당자','다음액션','메모','최종수정'],
+        ...STATE.leads.map(l => [
+          l.name, l.phone||'', l.brand||'', l.region||'', l.stage, l.source||'',
+          l.assignee||'', l.nextAction||'', l.memo||'', formatDate(l.updatedAt)
+        ])
+      ];
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetsId}/values/A1?valueInputOption=RAW&key=${sheetsApiKey}`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast(`Sheets 동기화 완료 ✓ (${STATE.leads.length}건)`);
+    } catch(e) {
+      showToast('Sheets 오류: ' + e.message, 'error');
+    }
+  }
+
+  // ─── FCM PUSH ────────────────────────────────────────────────────────
+  async function initFCM() {
+    if (!messaging || !STATE.settings.vapidKey) return;
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+      const token = await getToken(messaging, { vapidKey: STATE.settings.vapidKey });
+      if (token) {
+        await setDoc(doc(db, 'fcm_tokens', STATE.user.uid), { token, uid: STATE.user.uid, updatedAt: serverTimestamp() }, { merge: true });
+        console.log('FCM token saved');
+      }
+      onMessage(messaging, (payload) => {
+        showToast(`🔔 ${payload.notification?.title}: ${payload.notification?.body}`);
+      });
+    } catch(e) { console.log('FCM init failed:', e); }
+  }
+
+  // ─── FIRESTORE LISTENER ─────────────────────────────────────────────
+  function subscribeLeads() {
+    const q = query(collection(db, 'leads'), orderBy('updatedAt', 'desc'));
+    const unsub = onSnapshot(q, (snap) => {
+      STATE.leads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      render();
+    });
+    STATE.unsubscribes.push(unsub);
+  }
+
+  async function loadSettings() {
+    try {
+      const snap = await getDoc(doc(db, 'settings', STATE.user.uid));
+      if (snap.exists()) STATE.settings = { ...STATE.settings, ...snap.data() };
+    } catch(e) {}
+  }
+
+  // ─── AUTH ────────────────────────────────────────────────────────────
+  onAuthStateChanged(auth, async (user) => {
+    STATE.unsubscribes.forEach(u => u());
+    STATE.unsubscribes = [];
+    if (user) {
+      STATE.user = user;
+      await loadSettings();
+      subscribeLeads();
+      initFCM();
+    } else {
+      STATE.user = null;
+      STATE.leads = [];
+      render();
+    }
+  });
+
+  // ─── HELPERS ─────────────────────────────────────────────────────────
+  function getFilteredLeads() {
+    return STATE.leads.filter(l => {
+      if (STATE.filterStage !== 'all' && l.stage !== STATE.filterStage) return false;
+      if (STATE.filterSource !== 'all' && l.source !== STATE.filterSource) return false;
+      if (STATE.searchQuery) {
+        const q = STATE.searchQuery.toLowerCase();
+        return (l.name||'').toLowerCase().includes(q) ||
+               (l.brand||'').toLowerCase().includes(q) ||
+               (l.phone||'').includes(q) || (l.region||'').includes(q);
+      }
+      return true;
+    });
+  }
+
+  function formatDate(ts) {
+    if (!ts) return '—';
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    const now = new Date();
+    const diff = Math.floor((now - d) / (1000*60*60*24));
+    if (diff === 0) return '오늘';
+    if (diff === 1) return '어제';
+    if (diff < 7) return `${diff}일 전`;
+    return `${d.getMonth()+1}/${d.getDate()}`;
+  }
+
+  function isOverdueDate(dateStr, stage) {
+    if (!dateStr || ['계약완료','무산'].includes(stage)) return false;
+    const today = new Date(); today.setHours(0,0,0,0);
+    return new Date(dateStr) <= today;
+  }
+
+  function showToast(msg, type = 'success') {
+    const tc = $('toast-container');
+    if (!tc) return;
+    const t = document.createElement('div');
+    t.className = `toast toast-${type}`;
+    t.textContent = msg;
+    tc.appendChild(t);
+    setTimeout(() => t.classList.add('show'), 10);
+    setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3000);
+  }
+
+  // ─── INITIAL RENDER ──────────────────────────────────────────────────
+  render();
+</script>
+
+<style>
+/* ═══════════════════════════════════════════════════
+   DESIGN SYSTEM — Industrial Precision Dark Theme
+   ═══════════════════════════════════════════════════ */
+:root {
+  --bg: #070B14;
+  --bg-2: #0D1525;
+  --bg-3: #131D33;
+  --bg-4: #1A2740;
+  --border: #1E2E4A;
+  --border-2: #263650;
+  --accent: #2563EB;
+  --accent-glow: rgba(37,99,235,0.15);
+  --accent-2: #10B981;
+  --accent-3: #F59E0B;
+  --danger: #EF4444;
+  --text-1: #F0F4FF;
+  --text-2: #8899BB;
+  --text-3: #4B6080;
+  --card-shadow: 0 2px 16px rgba(0,0,0,0.5);
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font: 'Pretendard', -apple-system, sans-serif;
+  --mono: 'DM Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ── AUTH ─────────────────────────────────────────── */
+.auth-screen {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 50% 40%, rgba(37,99,235,0.12) 0%, transparent 70%), var(--bg);
+}
+.auth-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 48px 40px;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: center;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+.auth-logo { display: flex; align-items: center; gap: 16px; }
+.auth-logo-mark {
+  width: 52px; height: 52px;
+  background: var(--accent);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 800; color: #fff;
+}
+.auth-title { font-size: 20px; font-weight: 700; }
+.auth-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.btn-google {
+  display: flex; align-items: center; gap: 10px;
+  background: #fff; color: #333;
+  border: none; border-radius: var(--radius);
+  padding: 12px 24px;
+  font-size: 15px; font-weight: 500;
+  cursor: pointer; width: 100%;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.btn-google:hover { background: #f5f5f5; transform: translateY(-1px); }
+.auth-note { font-size: 12px; color: var(--text-3); text-align: center; }
+
+/* ── LAYOUT ──────────────────────────────────────── */
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+.sidebar {
+  width: 200px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.brand-mark {
+  width: 32px; height: 32px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 16px;
+  flex-shrink: 0;
+}
+.brand-name { font-size: 14px; font-weight: 700; }
+.brand-ver { font-size: 10px; color: var(--text-3); font-family: var(--mono); }
+
+.sidebar-nav { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-footer { padding: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border: none; border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+  width: 100%;
+}
+.nav-item:hover { background: var(--bg-3); color: var(--text-1); }
+.nav-item.active { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(37,99,235,0.2); }
+.nav-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+
+.user-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  margin-top: 4px;
+}
+.user-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.user-name { font-size: 12px; color: var(--text-2); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── TOPBAR ──────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  flex-shrink: 0;
+}
+.topbar-left { display: flex; align-items: center; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+
+.month-goal-widget {
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-3);
+  transition: all 0.15s;
+}
+.month-goal-widget:hover { border-color: var(--accent); }
+.goal-label { font-size: 11px; color: var(--text-2); white-space: nowrap; }
+.goal-progress-bar { width: 80px; height: 4px; background: var(--bg-4); border-radius: 2px; overflow: hidden; }
+.goal-fill { height: 100%; background: var(--accent-2); border-radius: 2px; transition: width 0.5s ease; }
+.goal-stat { display: flex; align-items: baseline; gap: 3px; font-size: 12px; }
+.goal-done { font-weight: 700; color: var(--accent-2); }
+.goal-sep { color: var(--text-3); }
+.goal-total { color: var(--text-2); }
+.goal-unit { font-size: 10px; color: var(--text-3); }
+.goal-pct { font-size: 11px; color: var(--text-2); font-family: var(--mono); }
+
+.search-wrap { position: relative; }
+.search-input {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 7px 32px 7px 10px;
+  color: var(--text-1); font-size: 13px; width: 200px;
+  outline: none; transition: all 0.15s;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-icon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; pointer-events: none; }
+
+.content-area { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* ── BUTTONS ─────────────────────────────────────── */
+.btn-primary {
+  background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius);
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-secondary {
+  background: var(--bg-3); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 16px; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-secondary:hover { background: var(--bg-4); }
+.btn-danger {
+  background: rgba(239,68,68,0.1); color: var(--danger);
+  border: 1px solid rgba(239,68,68,0.2); border-radius: var(--radius);
+  padding: 8px 16px; font-size: 13px; cursor: pointer; transition: all 0.15s;
+}
+.btn-danger:hover { background: rgba(239,68,68,0.2); }
+.btn-icon {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 7px 10px;
+  font-size: 14px; cursor: pointer; color: var(--text-2);
+  transition: all 0.15s;
+}
+.btn-icon:hover { color: var(--text-1); border-color: var(--border-2); }
+.btn-sm { font-size: 12px; padding: 5px 10px; }
+
+/* ── DASHBOARD ───────────────────────────────────── */
+.dashboard { display: flex; flex-direction: column; gap: 16px; }
+
+.dash-grid-top {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.kpi-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 14px;
+  transition: all 0.15s;
+}
+.kpi-card:hover { border-color: var(--border-2); }
+.kpi-icon {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700; flex-shrink: 0;
+}
+.kpi-total .kpi-icon { background: rgba(37,99,235,0.15); color: var(--accent); }
+.kpi-active .kpi-icon { background: rgba(245,158,11,0.15); color: var(--accent-3); }
+.kpi-won .kpi-icon { background: rgba(16,185,129,0.15); color: var(--accent-2); }
+.kpi-rate .kpi-icon { background: rgba(139,92,246,0.15); color: #8B5CF6; }
+.kpi-num { font-size: 26px; font-weight: 800; line-height: 1; font-family: var(--mono); }
+.kpi-unit { font-size: 16px; }
+.kpi-lbl { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+.alert-banner {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+}
+.alert-icon { color: var(--danger); }
+.alert-lead { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+.dash-grid-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr;
+  gap: 12px;
+}
+.dash-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+.dash-card-wide { grid-column: span 1; }
+.dash-card-title { font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }
+
+.stage-bars, .source-list { display: flex; flex-direction: column; gap: 8px; }
+.stage-bar-row, .source-row { display: flex; align-items: center; gap: 8px; }
+.stage-bar-lbl { font-size: 11px; color: var(--text-2); width: 60px; flex-shrink: 0; }
+.stage-bar-track { flex: 1; height: 6px; background: var(--bg-4); border-radius: 3px; overflow: hidden; }
+.stage-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+.stage-bar-cnt { font-size: 11px; color: var(--text-3); width: 16px; text-align: right; font-family: var(--mono); }
+
+.source-icon { font-size: 13px; }
+.source-lbl { font-size: 11px; color: var(--text-2); width: 68px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-bar-track { flex: 1; height: 5px; background: var(--bg-4); border-radius: 3px; overflow: hidden; }
+.source-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.5s ease; opacity: 0.7; }
+.source-cnt { font-size: 11px; color: var(--text-3); width: 16px; text-align: right; font-family: var(--mono); }
+
+.activity-list { display: flex; flex-direction: column; gap: 2px; }
+.activity-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px;
+  border-radius: var(--radius);
+  cursor: pointer; transition: all 0.15s;
+}
+.activity-row:hover { background: var(--bg-3); }
+.activity-stage-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.activity-info { flex: 1; min-width: 0; }
+.activity-name { font-size: 13px; font-weight: 600; }
+.activity-meta { font-size: 11px; color: var(--text-2); }
+.activity-right { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.activity-date { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+
+/* ── PIPELINE ─────────────────────────────────────── */
+.pipeline-view { display: flex; flex-direction: column; height: calc(100vh - 120px); gap: 12px; }
+.pipeline-header { flex-shrink: 0; }
+.pipe-filter-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+.kanban-board {
+  flex: 1;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+.kanban-col {
+  min-width: 200px;
+  max-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.kanban-col-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.kanban-col-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.kanban-col-title { font-size: 12px; font-weight: 600; flex: 1; }
+.kanban-col-cnt {
+  font-size: 11px; color: var(--text-3);
+  background: var(--bg-4);
+  padding: 2px 6px; border-radius: 10px;
+  font-family: var(--mono);
+}
+.kanban-cards {
+  flex: 1; overflow-y: auto;
+  padding: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.kanban-card {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.kanban-card:hover { border-color: var(--border-2); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.kanban-card.overdue { border-color: rgba(239,68,68,0.3); }
+.card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.card-source { font-size: 10px; color: var(--text-3); }
+.card-overdue-badge { font-size: 10px; background: rgba(239,68,68,0.15); color: var(--danger); padding: 2px 6px; border-radius: 4px; }
+.card-name { font-size: 13px; font-weight: 600; }
+.card-brand { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+.card-next-action { font-size: 10px; color: var(--text-3); margin-top: 6px; }
+.kanban-add-btn {
+  width: 100%; padding: 6px;
+  background: transparent; border: 1px dashed var(--border);
+  border-radius: var(--radius); color: var(--text-3);
+  font-size: 12px; cursor: pointer; transition: all 0.15s;
+}
+.kanban-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── LEADS TABLE ─────────────────────────────────── */
+.leads-view { display: flex; flex-direction: column; gap: 14px; }
+.leads-filters { display: flex; flex-direction: column; gap: 8px; }
+.filter-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-label { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+.filter-chip {
+  background: var(--bg-3); border: 1px solid var(--border);
+  color: var(--text-2); border-radius: 6px;
+  padding: 4px 10px; font-size: 11px; cursor: pointer; transition: all 0.15s;
+}
+.filter-chip:hover { border-color: var(--border-2); color: var(--text-1); }
+.filter-chip.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+
+.leads-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.leads-table { width: 100%; border-collapse: collapse; }
+.leads-table th {
+  background: var(--bg-2); color: var(--text-3);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.leads-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.leads-table tr:last-child td { border-bottom: none; }
+.lead-row { cursor: pointer; transition: all 0.15s; }
+.lead-row:hover td { background: var(--bg-2); }
+.lead-name-cell { font-weight: 600; }
+.memo-cell { color: var(--text-2); font-size: 12px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.overdue-text { color: var(--danger); }
+
+/* ── KPI PAGE ─────────────────────────────────────── */
+.kpi-view { display: flex; flex-direction: column; gap: 24px; }
+.kpi-section { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; }
+.kpi-section-title { font-size: 13px; font-weight: 700; margin-bottom: 16px; }
+
+.funnel-chart { display: flex; flex-direction: column; gap: 10px; }
+.funnel-step { display: flex; align-items: center; gap: 14px; }
+.funnel-bar-wrap { width: 300px; flex-shrink: 0; }
+.funnel-bar {
+  height: 28px; border-radius: 4px;
+  display: flex; align-items: center; padding: 0 10px;
+  min-width: 40px;
+}
+.funnel-rate { font-size: 12px; font-weight: 700; color: #fff; font-family: var(--mono); }
+.funnel-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.funnel-from { color: var(--text-1); }
+.funnel-arrow { color: var(--text-3); }
+.funnel-to { color: var(--text-2); }
+
+.source-kpi-table { display: flex; flex-direction: column; gap: 2px; }
+.skpi-header, .skpi-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 8px 10px;
+  align-items: center;
+}
+.skpi-header { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.skpi-row { border-radius: var(--radius); font-size: 13px; }
+.skpi-row:hover { background: var(--bg-3); }
+.won-num { color: var(--accent-2); font-weight: 600; }
+.lost-num { color: var(--danger); }
+.wr-badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; font-family: var(--mono); text-align: center; }
+.wr-good { background: rgba(16,185,129,0.15); color: var(--accent-2); }
+.wr-bad { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+.monthly-chart { display: flex; flex-direction: column; gap: 12px; }
+.chart-legend { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-2); }
+.legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.bar-chart { display: flex; align-items: flex-end; gap: 16px; height: 140px; padding-bottom: 24px; position: relative; }
+.bar-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bar-pair { display: flex; align-items: flex-end; gap: 4px; height: 120px; }
+.bar { width: 22px; border-radius: 3px 3px 0 0; transition: height 0.5s ease; cursor: pointer; min-height: 3px; }
+.bar-added { background: #3B82F6; }
+.bar-won { background: #10B981; }
+.bar-label { font-size: 11px; color: var(--text-3); }
+
+/* ── STAGE BADGE ─────────────────────────────────── */
+.stage-badge {
+  display: inline-block;
+  padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600;
+  background: color-mix(in srgb, var(--c) 15%, transparent);
+  color: var(--c);
+  border: 1px solid color-mix(in srgb, var(--c) 25%, transparent);
+}
+
+/* ── MODAL ───────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 20px;
+}
+.modal {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 520px; max-width: 100%;
+  max-height: 90vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.7);
+}
+.modal-wide { width: 820px; }
+.modal-sm { width: 360px; }
+.modal-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h2 { font-size: 16px; font-weight: 700; }
+.modal-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.modal-close {
+  background: none; border: none; color: var(--text-2);
+  font-size: 16px; cursor: pointer; padding: 4px;
+  border-radius: 4px; flex-shrink: 0;
+  transition: all 0.15s;
+}
+.modal-close:hover { background: var(--bg-3); color: var(--text-1); }
+.modal-body { flex: 1; overflow-y: auto; padding: 20px; }
+.modal-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.modal-col-left, .modal-col-right { display: flex; flex-direction: column; gap: 16px; }
+.modal-footer {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+.modal-footer-right { display: flex; gap: 10px; }
+
+/* ── FORM ────────────────────────────────────────── */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group-full { grid-column: span 2; }
+.form-group label { font-size: 11px; color: var(--text-2); font-weight: 600; }
+.form-input, .form-select, .form-textarea {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 10px;
+  color: var(--text-1); font-size: 13px; font-family: var(--font);
+  outline: none; transition: all 0.15s; width: 100%;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37,99,235,0.1);
+}
+.form-select { appearance: none; cursor: pointer; }
+.form-textarea { resize: vertical; }
+.form-input-lg { font-size: 22px; font-weight: 700; height: 56px; text-align: center; }
+
+/* ── AI PANEL ────────────────────────────────────── */
+.ai-panel {
+  background: var(--bg-3);
+  border: 1px solid rgba(37,99,235,0.3);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.ai-panel-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  background: rgba(37,99,235,0.1);
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  border-bottom: 1px solid rgba(37,99,235,0.2);
+}
+.ai-icon { font-size: 16px; }
+.ai-content { padding: 12px 14px; min-height: 80px; }
+.ai-placeholder { color: var(--text-3); font-size: 12px; }
+.ai-suggestion { font-size: 13px; line-height: 1.6; color: var(--text-1); }
+.btn-ai {
+  width: 100%;
+  background: rgba(37,99,235,0.15); color: var(--accent);
+  border: none; border-top: 1px solid rgba(37,99,235,0.2);
+  padding: 10px; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-ai:hover { background: rgba(37,99,235,0.25); }
+.btn-ai.loading { opacity: 0.7; pointer-events: none; }
+
+/* ── HISTORY ─────────────────────────────────────── */
+.history-panel { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.history-header { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.history-add { display: flex; flex-direction: column; gap: 6px; }
+.history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; max-height: 200px; }
+.history-item {
+  background: var(--bg-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.history-date { font-size: 10px; color: var(--text-3); margin-bottom: 4px; font-family: var(--mono); }
+.history-text { font-size: 12px; line-height: 1.5; }
+
+/* ── SETTINGS ────────────────────────────────────── */
+.settings-section { margin-bottom: 24px; }
+.settings-section h3 { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.settings-note { font-size: 11px; color: var(--text-2); margin-bottom: 12px; }
+
+/* ── TOAST ───────────────────────────────────────── */
+#toast-container {
+  position: fixed; bottom: 20px; right: 20px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 9999;
+}
+.toast {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px; font-size: 13px;
+  box-shadow: var(--card-shadow);
+  transform: translateX(120%);
+  transition: transform 0.3s ease;
+  max-width: 300px;
+}
+.toast.show { transform: translateX(0); }
+.toast-success { border-color: var(--accent-2); color: var(--accent-2); }
+.toast-error { border-color: var(--danger); color: var(--danger); }
+.toast-info { border-color: var(--accent); color: var(--accent); }
+
+/* ── MISC ────────────────────────────────────────── */
+.empty-state { text-align: center; color: var(--text-3); font-size: 13px; padding: 24px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── RESPONSIVE ──────────────────────────────────── */
+@media (max-width: 1200px) {
+  .dash-grid-bottom { grid-template-columns: 1fr 1fr; }
+  .dash-card-wide { grid-column: span 2; }
+}
+@media (max-width: 900px) {
+  .sidebar { width: 56px; }
+  .nav-label, .brand-text, .user-name, .user-avatar { display: none; }
+  .brand-mark { margin: 0 auto; }
+  .sidebar-brand { justify-content: center; }
+  .dash-grid-top { grid-template-columns: 1fr 1fr; }
+  .modal-two-col { grid-template-columns: 1fr; }
+  .modal-wide { width: 95vw; }
+}
+@media (max-width: 600px) {
+  .dash-grid-top { grid-template-columns: 1fr 1fr; }
+  .dash-grid-bottom { grid-template-columns: 1fr; }
+  .topbar { flex-wrap: wrap; }
+  .search-input { width: 140px; }
+}
+</style>
+</head>
+<body>
+<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;color:#8899BB;">
+  <div style="width:32px;height:32px;background:#2563EB;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#fff;">정</div>
+  <div style="font-size:13px;">로딩 중...</div>
+</div>
+</body>
+</html>
