@@ -1122,7 +1122,11 @@
 
   // ─── AUTH ────────────────────────────────────────────────────────────
   // 리디렉션 결과 처리
-  getRedirectResult(auth).catch(e => console.log('redirect result:', e));
+  getRedirectResult(auth).then(result => {
+    if (result?.user) {
+      STATE.user = result.user;
+    }
+  }).catch(e => console.log('redirect error:', e));
 
   onAuthStateChanged(auth, async (user) => {
     STATE.unsubscribes.forEach(u => u());
@@ -1132,6 +1136,7 @@
       await loadSettings();
       subscribeLeads();
       initFCM();
+      render();
     } else {
       STATE.user = null;
       STATE.leads = [];
