@@ -1060,28 +1060,21 @@
   }
 
   // ─── GOOGLE SHEETS SYNC ─────────────────────────────────────────────
+  const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbywt0v_57WXWIGLn0wLeWQjFjBme1npkAodNUbIpA4drILhYfSPah0V7sZUHmIxh5VlYw/exec";
+
   async function syncToSheets() {
-    const { sheetsId, sheetsApiKey } = STATE.settings;
-    if (!sheetsId || !sheetsApiKey) {
-      showToast('설정에서 Google Sheets 정보를 입력하세요', 'error');
-      STATE.showSettingsModal = true; render(); return;
-    }
     showToast('Sheets 동기화 중...', 'info');
     try {
-      const values = [
-        ['이름','연락처','브랜드','지역','단계','소스','담당자','다음액션','메모','최종수정'],
-        ...STATE.leads.map(l => [
-          l.name, l.phone||'', l.brand||'', l.region||'', l.stage, l.source||'',
-          l.assignee||'', l.nextAction||'', l.memo||'', formatDate(l.updatedAt)
-        ])
-      ];
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetsId}/values/A1?valueInputOption=RAW&key=${sheetsApiKey}`;
-      const res = await fetch(url, {
-        method: 'PUT',
+      const leads = STATE.leads.map(l => [
+        l.name, l.phone||'', l.brand||'', l.region||'', l.stage, l.source||'',
+        l.assignee||'', l.nextAction||'', l.memo||'', formatDate(l.updatedAt)
+      ]);
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values })
+        body: JSON.stringify({ leads })
       });
-      if (!res.ok) throw new Error(await res.text());
       showToast(`Sheets 동기화 완료 ✓ (${STATE.leads.length}건)`);
     } catch(e) {
       showToast('Sheets 오류: ' + e.message, 'error');
