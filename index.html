@@ -15,7 +15,7 @@
 <!-- Firebase SDKs -->
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-  import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
   import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, where, serverTimestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
   import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js';
 
@@ -106,7 +106,12 @@
   async function loginGoogle() {
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+      if (isPWA) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        await signInWithPopup(auth, provider);
+      }
     } catch(e) { showToast('로그인 실패: ' + e.message, 'error'); }
   }
 
@@ -1116,6 +1121,9 @@
   }
 
   // ─── AUTH ────────────────────────────────────────────────────────────
+  // 리디렉션 결과 처리
+  getRedirectResult(auth).catch(e => console.log('redirect result:', e));
+
   onAuthStateChanged(auth, async (user) => {
     STATE.unsubscribes.forEach(u => u());
     STATE.unsubscribes = [];
